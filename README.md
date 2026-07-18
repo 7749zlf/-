@@ -60,7 +60,7 @@ New persistence code should be placed behind a repository class instead of embed
 ## Focused Tests
 
 ```bash
-./mvnw "-Dtest=CorsConfigTests,ProductionSafetyGuardTests,PasswordHashServiceTests,TextEncodingRepairTests,H5UserServicePaymentStatusTests,H5UserServiceProductionModeTests,H5UserServiceSmsRateLimitTests,AdminAuthServiceLayeringTests,TokenAuthenticationServiceTests" test
+./mvnw "-Dtest=CorsConfigTests,ProductionSafetyGuardTests,PasswordHashServiceTests,TextEncodingRepairTests,H5UserServicePaymentStatusTests,H5UserServiceProductionModeTests,H5UserServiceSmsRateLimitTests,H5FinanceRepositoryTests,AdminAuthServiceLayeringTests,TokenAuthenticationServiceTests" test
 ```
 
 The full integration suite requires a reachable MySQL database with the project schema and seed data.

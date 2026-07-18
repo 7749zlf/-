@@ -68,6 +68,7 @@ import com.shortvideo.backend.h5.dto.WalletResponse;
 import com.shortvideo.backend.h5.dto.WatchHistoryRequest;
 import com.shortvideo.backend.h5.dto.WatchHistoryResponse;
 import com.shortvideo.backend.h5.repository.H5AuthTokenRepository;
+import com.shortvideo.backend.h5.repository.H5FinanceRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -104,6 +105,7 @@ public class H5UserService {
     private final DataProtectionService dataProtection;
     private final PasswordHashService passwordHashService;
     private final H5AuthTokenRepository authTokenRepository;
+    private final H5FinanceRepository financeRepository;
     private final String publicBaseUrl;
     private final String avatarUploadDir;
     private final boolean demoRechargeEnabled;
@@ -117,6 +119,7 @@ public class H5UserService {
             DataProtectionService dataProtection,
             PasswordHashService passwordHashService,
             H5AuthTokenRepository authTokenRepository,
+            H5FinanceRepository financeRepository,
             @Value("${app.public-base-url}") String publicBaseUrl,
             @Value("${app.storage.avatar-upload-dir}") String avatarUploadDir,
             @Value("${app.demo.recharge-enabled:true}") boolean demoRechargeEnabled,
@@ -128,6 +131,7 @@ public class H5UserService {
         this.dataProtection = dataProtection;
         this.passwordHashService = passwordHashService;
         this.authTokenRepository = authTokenRepository;
+        this.financeRepository = financeRepository;
         this.publicBaseUrl = trimTrailingSlash(publicBaseUrl);
         this.avatarUploadDir = avatarUploadDir;
         this.demoRechargeEnabled = demoRechargeEnabled;
@@ -397,9 +401,9 @@ public class H5UserService {
         return new WalletResponse(
                 user.deviceId(),
                 user.balance(),
-                paidAmount(userId),
-                count("SELECT COUNT(*) FROM orders WHERE user_id = ?", userId),
-                count("SELECT COUNT(*) FROM recharge_records WHERE user_id = ?", userId)
+                financeRepository.paidAmount(userId),
+                financeRepository.orderCount(userId),
+                financeRepository.rechargeCount(userId)
         );
     }
 
@@ -414,13 +418,13 @@ public class H5UserService {
         UserRow user = userRow(userId);
         return new H5ProfileSummaryResponse(
                 user.balance(),
-                paidAmount(userId),
-                count("SELECT COUNT(*) FROM user_follows WHERE user_id = ?", userId),
-                count("SELECT COUNT(*) FROM episode_likes WHERE user_id = ?", userId),
-                count("SELECT COUNT(*) FROM watch_history WHERE user_id = ?", userId),
-                count("SELECT COUNT(*) FROM user_unlocks WHERE user_id = ?", userId),
-                count("SELECT COUNT(*) FROM orders WHERE user_id = ?", userId),
-                count("SELECT COUNT(*) FROM recharge_records WHERE user_id = ?", userId)
+                financeRepository.paidAmount(userId),
+                financeRepository.followedDramaCount(userId),
+                financeRepository.likedEpisodeCount(userId),
+                financeRepository.watchHistoryCount(userId),
+                financeRepository.unlockedStorylineCount(userId),
+                financeRepository.orderCount(userId),
+                financeRepository.rechargeCount(userId)
         );
     }
 
@@ -555,11 +559,8 @@ public class H5UserService {
         String id = nextId("RC");
         String methodKey = defaultText(request == null ? null : request.methodKey(), "balance-demo");
         String methodName = defaultText(request == null ? null : request.methodName(), "演示充值");
-        jdbc.update("""
-                INSERT INTO recharge_records (id, user_id, amount, method_key, method_name, status)
-                VALUES (?, ?, ?, ?, ?, 'PAID')
-                """, id, userId, amount, methodKey, methodName);
-        jdbc.update("UPDATE app_users SET balance = balance + ? WHERE id = ?", amount, userId);
+        financeRepository.createPaidRecharge(id, userId, amount, methodKey, methodName);
+        financeRepository.incrementBalance(userId, amount);
         return new RechargeResponse(id, amount, formatMoney(amount), methodKey, methodName, "PAID", LocalDateTime.now());
     }
 
@@ -576,20 +577,17 @@ public class H5UserService {
     }
 
     private List<RechargeResponse> listRechargesByUserId(long userId) {
-        return jdbc.query("""
-                SELECT id, amount, method_key, method_name, status, created_at
-                FROM recharge_records
-                WHERE user_id = ?
-                ORDER BY created_at DESC
-                """, (rs, rowNum) -> new RechargeResponse(
-                rs.getString("id"),
-                rs.getBigDecimal("amount"),
-                formatMoney(rs.getBigDecimal("amount")),
-                repair(rs.getString("method_key")),
-                repair(rs.getString("method_name")),
-                rs.getString("status"),
-                toLocalDateTime(rs.getTimestamp("created_at"))
-        ), userId);
+        return financeRepository.findRechargeRecords(userId).stream()
+                .map((record) -> new RechargeResponse(
+                        record.id(),
+                        record.amount(),
+                        formatMoney(record.amount()),
+                        repair(record.methodKey()),
+                        repair(record.methodName()),
+                        record.status(),
+                        record.createdAt()
+                ))
+                .toList();
     }
 
     @Transactional
@@ -676,11 +674,15 @@ public class H5UserService {
         String methodKey = defaultText(request == null ? null : request.methodKey(), "balance");
         String methodName = defaultText(request == null ? null : request.methodName(), "演示余额");
         String id = nextId("PAY");
-        jdbc.update("""
-                INSERT INTO h5_payments
-                (id, user_id, drama_id, storyline_id, amount, method_key, method_name, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING')
-                """, id, userId, dramaId, nullableText(request == null ? null : request.storylineId()), amount, methodKey, methodName);
+        financeRepository.createPendingPayment(
+                id,
+                userId,
+                dramaId,
+                nullableText(request == null ? null : request.storylineId()),
+                amount,
+                methodKey,
+                methodName
+        );
         recordPaymentEvent(id, "CREATED", "PENDING", null, "Payment order created");
         return new PaymentResponse(id, "PENDING", amount, formatMoney(amount), methodKey, methodName, "demo://payment/" + id);
     }
@@ -690,7 +692,7 @@ public class H5UserService {
         long userId = userIdFromAuthorization(authorization)
                 .map(this::requireActiveUser)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "H5 login is required"));
-        PaymentRow payment = paymentRow(paymentId);
+        H5FinanceRepository.PaymentRecord payment = paymentRow(paymentId);
         if (payment.userId() != userId) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Payment does not belong to current user");
         }
@@ -704,7 +706,7 @@ public class H5UserService {
         }
         String paymentId = request.paymentId().trim();
         String status = normalizePaymentStatus(request.status());
-        PaymentRow payment = paymentRow(paymentId);
+        H5FinanceRepository.PaymentRecord payment = paymentRow(paymentId);
         String providerTradeNo = safe(request.providerTradeNo());
         recordPaymentEvent(paymentId, "CALLBACK_RECEIVED", status, providerTradeNo, "Payment callback received");
         if ("REFUNDED".equalsIgnoreCase(payment.status())) {
@@ -713,13 +715,7 @@ public class H5UserService {
         if ("PAID".equals(status)) {
             ensurePaymentStoryline(payment);
         }
-        int updated = jdbc.update("""
-                UPDATE h5_payments
-                SET status = ?,
-                    provider_trade_no = COALESCE(NULLIF(?, ''), provider_trade_no),
-                    paid_at = CASE WHEN ? = 'PAID' THEN CURRENT_TIMESTAMP ELSE paid_at END
-                WHERE id = ? AND status IN ('PENDING', 'FAILED', 'CANCELLED')
-                """, status, providerTradeNo, status, paymentId);
+        int updated = financeRepository.updatePaymentFromCallback(paymentId, status, providerTradeNo);
         if ("PAID".equals(status) && updated > 0) {
             settleBalanceIfNeeded(payment);
             grantPaymentEntitlement(paymentId);
@@ -737,7 +733,7 @@ public class H5UserService {
         long userId = userIdFromAuthorization(authorization)
                 .map(this::requireActiveUser)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "H5 login is required"));
-        PaymentRow payment = paymentRow(paymentId);
+        H5FinanceRepository.PaymentRecord payment = paymentRow(paymentId);
         if (payment.userId() != userId) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Payment does not belong to current user");
         }
@@ -750,13 +746,7 @@ public class H5UserService {
         }
 
         ensurePaymentStoryline(payment);
-        int updated = jdbc.update("""
-                UPDATE h5_payments
-                SET status = 'PAID',
-                    provider_trade_no = COALESCE(provider_trade_no, ?),
-                    paid_at = CURRENT_TIMESTAMP
-                WHERE id = ? AND status = 'PENDING'
-                """, "local-" + payment.id(), payment.id());
+        int updated = financeRepository.markPendingPaymentPaid(payment.id(), "local-" + payment.id());
         if (updated > 0) {
             settleBalanceIfNeeded(payment);
             grantPaymentEntitlement(payment.id());
@@ -769,24 +759,16 @@ public class H5UserService {
     @Transactional
     public InteractionStateResponse interactionState(String authorization, String deviceId, Long dramaId, String episodeId) {
         long userId = requestUserId(authorization, deviceId);
-        boolean followed = dramaId != null && exists("""
-                SELECT COUNT(*)
-                FROM user_follows
-                WHERE user_id = ? AND drama_id = ?
-                """, userId, dramaId);
-        boolean liked = episodeId != null && exists("""
-                SELECT COUNT(*)
-                FROM episode_likes
-                WHERE user_id = ? AND episode_id = ?
-                """, userId, episodeId);
+        boolean followed = dramaId != null && financeRepository.hasFollowedDrama(userId, dramaId);
+        boolean liked = episodeId != null && financeRepository.hasLikedEpisode(userId, episodeId);
         return new InteractionStateResponse(
                 true,
                 dramaId,
                 episodeId,
                 followed,
                 liked,
-                count("SELECT COUNT(*) FROM user_follows WHERE user_id = ?", userId),
-                count("SELECT COUNT(*) FROM episode_likes WHERE user_id = ?", userId),
+                financeRepository.followedDramaCount(userId),
+                financeRepository.likedEpisodeCount(userId),
                 listFollowedDramas(authorization, deviceId),
                 listLikedEpisodes(authorization, deviceId)
         );
@@ -957,10 +939,10 @@ public class H5UserService {
                 user.balance(),
                 user.status(),
                 user.phoneBound(),
-                paidAmount(userId),
-                count("SELECT COUNT(*) FROM watch_history WHERE user_id = ?", userId),
-                count("SELECT COUNT(*) FROM user_unlocks WHERE user_id = ?", userId),
-                count("SELECT COUNT(*) FROM orders WHERE user_id = ?", userId),
+                financeRepository.paidAmount(userId),
+                financeRepository.watchHistoryCount(userId),
+                financeRepository.unlockedStorylineCount(userId),
+                financeRepository.orderCount(userId),
                 jdbc.query("SELECT drama_id FROM user_follows WHERE user_id = ? ORDER BY created_at DESC",
                         (rs, rowNum) -> rs.getLong("drama_id"), userId),
                 jdbc.query("SELECT episode_id FROM episode_likes WHERE user_id = ? ORDER BY created_at DESC",
@@ -1194,19 +1176,16 @@ public class H5UserService {
     }
 
     private PaymentResponse paymentById(String paymentId) {
-        return jdbc.query("""
-                SELECT id, status, amount, method_key, method_name
-                FROM h5_payments
-                WHERE id = ?
-                """, (rs, rowNum) -> new PaymentResponse(
-                rs.getString("id"),
-                rs.getString("status"),
-                rs.getBigDecimal("amount"),
-                formatMoney(rs.getBigDecimal("amount")),
-                repair(rs.getString("method_key")),
-                repair(rs.getString("method_name")),
-                "demo://payment/" + rs.getString("id")
-        ), paymentId).stream().findFirst()
+        return financeRepository.findPaymentSummary(paymentId)
+                .map((payment) -> new PaymentResponse(
+                        payment.id(),
+                        payment.status(),
+                        payment.amount(),
+                        formatMoney(payment.amount()),
+                        repair(payment.methodKey()),
+                        repair(payment.methodName()),
+                        "demo://payment/" + payment.id()
+                ))
                 .orElseThrow(() -> new IllegalArgumentException("payment not found: " + paymentId));
     }
 
@@ -1314,39 +1293,23 @@ public class H5UserService {
         return value == null ? "" : value.format(REFUND_TIME);
     }
 
-    private PaymentRow paymentRow(String paymentId) {
+    private H5FinanceRepository.PaymentRecord paymentRow(String paymentId) {
         String safePaymentId = safe(paymentId);
         if (safePaymentId.isBlank()) {
             throw new IllegalArgumentException("paymentId is required");
         }
 
-        return jdbc.query("""
-                SELECT id, user_id, drama_id, storyline_id, amount, method_key, status
-                FROM h5_payments
-                WHERE id = ?
-                """, (rs, rowNum) -> new PaymentRow(
-                rs.getString("id"),
-                rs.getLong("user_id"),
-                rs.getLong("drama_id"),
-                rs.getString("storyline_id"),
-                positiveAmount(rs.getBigDecimal("amount"), BigDecimal.ZERO),
-                rs.getString("method_key"),
-                rs.getString("status")
-        ), safePaymentId).stream().findFirst()
+        return financeRepository.findPayment(safePaymentId)
                 .orElseThrow(() -> new IllegalArgumentException("payment not found: " + safePaymentId));
     }
 
-    private StorylineResponse ensurePaymentStoryline(PaymentRow payment) {
+    private StorylineResponse ensurePaymentStoryline(H5FinanceRepository.PaymentRecord payment) {
         if (payment.storylineId() != null && !payment.storylineId().isBlank()) {
             return storylineById(payment.storylineId());
         }
 
         StorylineResponse line = selectPaymentStoryline(payment.userId(), payment.dramaId());
-        jdbc.update("""
-                UPDATE h5_payments
-                SET storyline_id = ?
-                WHERE id = ? AND (storyline_id IS NULL OR storyline_id = '')
-                """, line.id(), payment.id());
+        financeRepository.assignStorylineToPayment(payment.id(), line.id());
         return line;
     }
 
@@ -1420,24 +1383,14 @@ public class H5UserService {
     }
 
     private void recordPaymentEvent(String paymentId, String eventType, String status, String providerTradeNo, String message) {
-        jdbc.update("""
-                INSERT INTO h5_payment_events (payment_id, event_type, status, provider_trade_no, message)
-                VALUES (?, ?, ?, NULLIF(?, ''), ?)
-                """,
-                paymentId,
-                eventType,
-                status,
-                safe(providerTradeNo),
-                safe(message));
+        financeRepository.recordPaymentEvent(paymentId, eventType, status, providerTradeNo, message);
     }
 
-    private void settleBalanceIfNeeded(PaymentRow payment) {
+    private void settleBalanceIfNeeded(H5FinanceRepository.PaymentRecord payment) {
         if (!isBalancePayment(payment.methodKey())) {
             return;
         }
-        int updated = jdbc.update(
-                "UPDATE app_users SET balance = balance - ? WHERE id = ? AND balance >= ?",
-                payment.amount(), payment.userId(), payment.amount());
+        int updated = financeRepository.debitBalanceIfEnough(payment.userId(), payment.amount());
         if (updated == 0) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Insufficient balance");
         }
@@ -1449,47 +1402,12 @@ public class H5UserService {
     }
 
     private void grantPaymentEntitlement(String paymentId) {
-        int insertedOrders = jdbc.update("""
-                INSERT IGNORE INTO orders
-                (id, user_id, drama_id, storyline_id, title, amount, payment_method, payment_method_key, status, paid_at)
-                SELECT p.id, p.user_id, p.drama_id, p.storyline_id,
-                       COALESCE(s.name, '支付订单'), p.amount, p.method_name, p.method_key, 'PAID', CURRENT_TIMESTAMP
-                FROM h5_payments p
-                LEFT JOIN storylines s ON s.id = p.storyline_id
-                WHERE p.id = ? AND p.status = 'PAID'
-                """, paymentId);
-        jdbc.update("""
-                INSERT IGNORE INTO user_unlocks (user_id, drama_id, storyline_id, order_id)
-                SELECT user_id, drama_id, storyline_id, id
-                FROM h5_payments
-                WHERE id = ? AND status = 'PAID' AND storyline_id IS NOT NULL AND storyline_id <> ''
-                """, paymentId);
+        int insertedOrders = financeRepository.insertPaidOrderFromPayment(paymentId);
+        financeRepository.insertUnlockFromPayment(paymentId);
         if (insertedOrders > 0) {
-            jdbc.update("""
-                    UPDATE app_users u
-                    JOIN h5_payments p ON p.user_id = u.id
-                    SET u.paid_amount = u.paid_amount + p.amount
-                    WHERE p.id = ?
-                    """, paymentId);
+            financeRepository.addPaidAmountFromPayment(paymentId);
         }
     }
-
-    private BigDecimal paidAmount(long userId) {
-        BigDecimal value = jdbc.queryForObject("SELECT COALESCE(SUM(amount), 0) FROM orders WHERE user_id = ? AND status = 'PAID'",
-                BigDecimal.class, userId);
-        return value == null ? BigDecimal.ZERO : value;
-    }
-
-    private int count(String sql, long userId) {
-        Integer value = jdbc.queryForObject(sql, Integer.class, userId);
-        return value == null ? 0 : value;
-    }
-
-    private boolean exists(String sql, long userId, Object targetId) {
-        Integer value = jdbc.queryForObject(sql, Integer.class, userId, targetId);
-        return value != null && value > 0;
-    }
-
     private String normalizeDeviceId(String deviceId) {
         return deviceId == null || deviceId.isBlank() ? DEFAULT_DEVICE_ID : deviceId.trim();
     }
@@ -1699,17 +1617,6 @@ public class H5UserService {
             String reviewerUsername,
             Timestamp createdAt,
             Timestamp reviewedAt
-    ) {
-    }
-
-    private record PaymentRow(
-            String id,
-            long userId,
-            long dramaId,
-            String storylineId,
-            BigDecimal amount,
-            String methodKey,
-            String status
     ) {
     }
 

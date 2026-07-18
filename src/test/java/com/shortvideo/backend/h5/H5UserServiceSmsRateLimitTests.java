@@ -28,6 +28,7 @@ class H5UserServiceSmsRateLimitTests {
                 new DataProtectionService("test-data-key-at-least-32-characters"),
                 new PasswordHashService(),
                 null,
+                null,
                 "http://localhost:8081",
                 "uploads/avatars",
                 true,

@@ -21,6 +21,7 @@ class H5UserServiceProductionModeTests {
             new DataProtectionService("test-data-key-at-least-32-characters"),
             new PasswordHashService(),
             null,
+            null,
             "https://api.example.com",
             "uploads/avatars",
             false,
