@@ -6,6 +6,9 @@ public record UnlockOrderResponse(
         String amount,
         String paymentMethod,
         String paymentMethodKey,
-        String time
+        String time,
+        String status,
+        String refundStatus,
+        String refundReason
 ) {
 }

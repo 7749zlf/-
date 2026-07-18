@@ -2,6 +2,7 @@ package com.shortvideo.backend.h5;
 
 import com.shortvideo.backend.h5.dto.H5SnapshotResponse;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -15,7 +16,10 @@ public class H5SnapshotController {
     }
 
     @GetMapping({"/api/h5/snapshot", "/h5/snapshot"})
-    public H5SnapshotResponse snapshot(@RequestParam(required = false) String deviceId) {
-        return h5Service.snapshot(deviceId);
+    public H5SnapshotResponse snapshot(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestParam(required = false) String deviceId
+    ) {
+        return h5Service.snapshot(authorization, deviceId);
     }
 }

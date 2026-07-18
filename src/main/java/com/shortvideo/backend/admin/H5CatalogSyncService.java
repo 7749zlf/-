@@ -20,6 +20,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import static com.shortvideo.backend.common.TextEncodingRepair.repair;
+
 @Service
 public class H5CatalogSyncService {
 
@@ -311,7 +313,7 @@ public class H5CatalogSyncService {
             return fallback;
         }
         String text = String.valueOf(value).trim();
-        return text.isBlank() ? fallback : text;
+        return text.isBlank() ? fallback : repair(text);
     }
 
     private String limit(String value, int maxLength) {

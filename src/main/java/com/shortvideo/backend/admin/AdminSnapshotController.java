@@ -25,7 +25,7 @@ public class AdminSnapshotController {
             @RequestHeader(value = "Authorization", required = false) String authorization,
             @RequestHeader(value = "X-Admin-Token", required = false) String legacyToken
     ) {
-        authService.requireAdmin(authorization, legacyToken);
+        authService.requirePermission(authorization, legacyToken, "dashboard");
         return snapshotService.loadSnapshot();
     }
 
@@ -35,7 +35,7 @@ public class AdminSnapshotController {
             @RequestHeader(value = "X-Admin-Token", required = false) String legacyToken,
             @RequestBody(required = false) JsonNode snapshot
     ) {
-        authService.requireAdmin(authorization, legacyToken);
+        authService.requirePermission(authorization, legacyToken, "settings");
         return snapshotService.saveSnapshot(snapshot);
     }
 }

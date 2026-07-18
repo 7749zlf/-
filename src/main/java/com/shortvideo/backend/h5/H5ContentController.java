@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -42,23 +43,28 @@ public class H5ContentController {
 
     @GetMapping("/episodes")
     public List<EpisodeResponse> listEpisodes(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
             @RequestParam(required = false) Long dramaId,
             @RequestParam(required = false) String deviceId
     ) {
-        return h5Service.listEpisodes(dramaId, deviceId);
+        return h5Service.listEpisodes(dramaId, authorization, deviceId);
     }
 
     @GetMapping("/dramas/{dramaId}/episodes")
     public List<EpisodeResponse> listDramaEpisodes(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
             @PathVariable long dramaId,
             @RequestParam(required = false) String deviceId
     ) {
-        return h5Service.listEpisodes(dramaId, deviceId);
+        return h5Service.listEpisodes(dramaId, authorization, deviceId);
     }
 
     @PostMapping("/episodes/access-check")
-    public EpisodeAccessResponse checkEpisodeAccess(@RequestBody(required = false) EpisodeAccessRequest request) {
-        return h5Service.checkEpisodeAccess(request);
+    public EpisodeAccessResponse checkEpisodeAccess(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestBody(required = false) EpisodeAccessRequest request
+    ) {
+        return h5Service.checkEpisodeAccess(request, authorization);
     }
 
     @GetMapping("/storylines")

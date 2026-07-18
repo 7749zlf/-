@@ -4,11 +4,15 @@ import java.util.Optional;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.databind.node.TextNode;
 import com.shortvideo.backend.admin.dto.H5SnapshotPayload;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import static com.shortvideo.backend.common.TextEncodingRepair.repair;
 
 @Service
 public class AdminSnapshotService {
@@ -30,7 +34,7 @@ public class AdminSnapshotService {
                 SELECT JSON_PRETTY(payload) AS payload
                 FROM admin_snapshots
                 WHERE id = ?
-                """, (rs, rowNum) -> readJson(rs.getString("payload")), SNAPSHOT_ID)
+                """, (rs, rowNum) -> repairSnapshot(readJson(rs.getString("payload"))), SNAPSHOT_ID)
                 .stream()
                 .findFirst()
                 .orElseGet(objectMapper::createObjectNode);
@@ -38,7 +42,7 @@ public class AdminSnapshotService {
 
     @Transactional
     public JsonNode saveSnapshot(JsonNode snapshot) {
-        JsonNode safeSnapshot = snapshot == null ? objectMapper.createObjectNode() : snapshot;
+        JsonNode safeSnapshot = repairSnapshot(snapshot == null ? objectMapper.createObjectNode() : snapshot);
         String payload = writeJson(safeSnapshot);
         jdbc.update("""
                 INSERT INTO admin_snapshots (id, payload)
@@ -74,6 +78,30 @@ public class AdminSnapshotService {
         } catch (Exception ex) {
             throw new IllegalArgumentException("Invalid admin snapshot payload");
         }
+    }
+
+    private JsonNode repairSnapshot(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return node;
+        }
+
+        if (node.isTextual()) {
+            return TextNode.valueOf(repair(node.asText()));
+        }
+
+        if (node.isArray()) {
+            ArrayNode fixed = objectMapper.createArrayNode();
+            node.forEach(item -> fixed.add(repairSnapshot(item)));
+            return fixed;
+        }
+
+        if (node.isObject()) {
+            ObjectNode fixed = objectMapper.createObjectNode();
+            node.fields().forEachRemaining(entry -> fixed.set(entry.getKey(), repairSnapshot(entry.getValue())));
+            return fixed;
+        }
+
+        return node;
     }
 
     private String writeJson(JsonNode payload) {

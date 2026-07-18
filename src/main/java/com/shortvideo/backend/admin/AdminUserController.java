@@ -3,6 +3,7 @@ package com.shortvideo.backend.admin;
 import java.util.List;
 
 import com.shortvideo.backend.admin.dto.AdminUserRequest;
+import com.shortvideo.backend.admin.dto.AdminUserDetailResponse;
 import com.shortvideo.backend.admin.dto.AdminUserResponse;
 import com.shortvideo.backend.admin.dto.AdminUserStatusRequest;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -34,8 +35,18 @@ public class AdminUserController {
             @RequestHeader(value = "X-Admin-Token", required = false) String legacyToken,
             @RequestParam(required = false) String keyword
     ) {
-        authService.requireAdmin(authorization, legacyToken);
+        authService.requirePermission(authorization, legacyToken, "users");
         return userService.listUsers(keyword);
+    }
+
+    @GetMapping("/{id}/detail")
+    public AdminUserDetailResponse userDetail(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Admin-Token", required = false) String legacyToken,
+            @PathVariable String id
+    ) {
+        authService.requirePermission(authorization, legacyToken, "users");
+        return userService.getUserDetail(id);
     }
 
     @PostMapping
@@ -44,7 +55,7 @@ public class AdminUserController {
             @RequestHeader(value = "X-Admin-Token", required = false) String legacyToken,
             @RequestBody(required = false) AdminUserRequest request
     ) {
-        authService.requireAdmin(authorization, legacyToken);
+        authService.requirePermission(authorization, legacyToken, "users");
         return userService.createUser(request);
     }
 
@@ -55,7 +66,7 @@ public class AdminUserController {
             @PathVariable String id,
             @RequestBody(required = false) AdminUserRequest request
     ) {
-        authService.requireAdmin(authorization, legacyToken);
+        authService.requirePermission(authorization, legacyToken, "users");
         return userService.updateUser(id, request);
     }
 
@@ -66,7 +77,7 @@ public class AdminUserController {
             @PathVariable String id,
             @RequestBody(required = false) AdminUserStatusRequest request
     ) {
-        authService.requireAdmin(authorization, legacyToken);
+        authService.requirePermission(authorization, legacyToken, "users");
         return userService.updateStatus(id, request == null ? "NORMAL" : request.status());
     }
 }

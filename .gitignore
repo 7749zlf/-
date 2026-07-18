@@ -4,6 +4,8 @@ target/
 !**/src/main/**/target/
 !**/src/test/**/target/
 test-results/
+uploads/
+.env
 *.log
 backup-short_video-*.sql
 *.err.log

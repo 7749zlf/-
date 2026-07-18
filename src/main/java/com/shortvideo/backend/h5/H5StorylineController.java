@@ -9,6 +9,7 @@ import com.shortvideo.backend.h5.dto.UnlockOrderResponse;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -24,17 +25,26 @@ public class H5StorylineController {
     }
 
     @PostMapping("/storylines/draw")
-    public DrawResponse drawStoryline(@RequestBody(required = false) DrawRequest request) {
-        return h5Service.drawStoryline(request);
+    public DrawResponse drawStoryline(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestBody(required = false) DrawRequest request
+    ) {
+        return h5Service.drawStoryline(request, authorization);
     }
 
     @GetMapping("/me/orders")
-    public List<UnlockOrderResponse> listOrders(@RequestParam(required = false) String deviceId) {
-        return h5Service.listOrders(deviceId);
+    public List<UnlockOrderResponse> listOrders(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestParam(required = false) String deviceId
+    ) {
+        return h5Service.listOrders(authorization, deviceId);
     }
 
     @GetMapping("/me/unlocks")
-    public List<StorylineResponse> listUnlocks(@RequestParam(required = false) String deviceId) {
-        return h5Service.listUnlocks(deviceId);
+    public List<StorylineResponse> listUnlocks(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestParam(required = false) String deviceId
+    ) {
+        return h5Service.listUnlocks(authorization, deviceId);
     }
 }

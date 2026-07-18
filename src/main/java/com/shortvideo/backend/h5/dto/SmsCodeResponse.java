@@ -5,6 +5,7 @@ public record SmsCodeResponse(
         Boolean sent,
         Integer cooldownSeconds,
         Integer cooldown,
-        String requestId
+        String requestId,
+        String debugCode
 ) {
 }
