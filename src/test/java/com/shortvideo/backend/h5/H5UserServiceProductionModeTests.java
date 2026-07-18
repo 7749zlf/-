@@ -20,6 +20,7 @@ class H5UserServiceProductionModeTests {
             new ObjectMapper(),
             new DataProtectionService("test-data-key-at-least-32-characters"),
             new PasswordHashService(),
+            null,
             "https://api.example.com",
             "uploads/avatars",
             false,

@@ -1,9 +1,7 @@
 package com.shortvideo.backend.admin;
 
-import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -11,16 +9,15 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shortvideo.backend.admin.dto.AdminAuthResponse;
 import com.shortvideo.backend.admin.dto.AdminLoginRequest;
 import com.shortvideo.backend.admin.dto.AdminProfileResponse;
+import com.shortvideo.backend.admin.repository.AdminAuthRepository;
+import com.shortvideo.backend.admin.repository.AdminUserRecord;
 import com.shortvideo.backend.common.PasswordHashService;
 import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
@@ -42,8 +39,7 @@ public class AdminAuthService {
             "settings"
     );
 
-    private final JdbcTemplate jdbc;
-    private final ObjectMapper objectMapper;
+    private final AdminAuthRepository authRepository;
     private final PasswordHashService passwordHashService;
     private final String bootstrapUsername;
     private final String bootstrapPassword;
@@ -54,9 +50,8 @@ public class AdminAuthService {
     private final ConcurrentMap<String, LoginAttempt> loginAttempts = new ConcurrentHashMap<>();
 
     public AdminAuthService(
-            JdbcTemplate jdbc,
-            ObjectMapper objectMapper,
             PasswordHashService passwordHashService,
+            AdminAuthRepository authRepository,
             @Value("${app.security.bootstrap-admin-username}") String bootstrapUsername,
             @Value("${app.security.bootstrap-admin-password}") String bootstrapPassword,
             @Value("${app.security.bootstrap-admin-name}") String bootstrapDisplayName,
@@ -64,9 +59,8 @@ public class AdminAuthService {
             @Value("${app.security.admin-login-max-failures:5}") int maxLoginFailures,
             @Value("${app.security.admin-login-lockout-minutes:10}") int loginLockoutMinutes
     ) {
-        this.jdbc = jdbc;
-        this.objectMapper = objectMapper;
         this.passwordHashService = passwordHashService;
+        this.authRepository = authRepository;
         this.bootstrapUsername = clean(bootstrapUsername, "admin");
         this.bootstrapPassword = clean(bootstrapPassword, "Admin@123456");
         this.bootstrapDisplayName = clean(bootstrapDisplayName, "Administrator");
@@ -78,19 +72,12 @@ public class AdminAuthService {
     @PostConstruct
     void ensureBootstrapAdmin() {
         PasswordHashService.EncodedPassword passwordHash = passwordHashService.encode(bootstrapPassword);
-        jdbc.update("""
-                INSERT INTO admin_users
-                (username, password_salt, password_hash, display_name, role_key, permissions, status)
-                SELECT ?, ?, ?, ?, 'administrator', CAST(? AS JSON), 'ENABLED'
-                FROM DUAL
-                WHERE NOT EXISTS (SELECT 1 FROM admin_users)
-                ON DUPLICATE KEY UPDATE username = username
-                """,
+        authRepository.createBootstrapAdminIfMissing(
                 bootstrapUsername,
-                passwordHash.salt(),
-                passwordHash.hash(),
+                passwordHash,
                 bootstrapDisplayName,
-                writeJson(DEFAULT_PERMISSIONS));
+                DEFAULT_PERMISSIONS
+        );
     }
 
     @Transactional
@@ -103,7 +90,7 @@ public class AdminAuthService {
 
         String attemptKey = username.toLowerCase(Locale.ROOT);
         ensureLoginAllowed(attemptKey);
-        AdminUserRow row = findAdminByUsername(username);
+        AdminUserRecord row = authRepository.findByUsername(username).orElse(null);
         if (row == null || !passwordHashService.matches(row.passwordSalt(), row.passwordHash(), password)) {
             recordFailedLogin(attemptKey);
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Admin account or password is invalid");
@@ -115,10 +102,7 @@ public class AdminAuthService {
         upgradePasswordHashIfNeeded(row, password);
 
         String token = "adm_" + randomToken();
-        jdbc.update("""
-                INSERT INTO admin_auth_tokens (token, admin_id, expires_at)
-                VALUES (?, ?, ?)
-                """, token, row.id(), Timestamp.valueOf(LocalDateTime.now().plusSeconds(TOKEN_SECONDS)));
+        authRepository.saveToken(token, row.id(), LocalDateTime.now().plusSeconds(TOKEN_SECONDS));
         return new AdminAuthResponse(token, TOKEN_SECONDS, toProfile(row));
     }
 
@@ -126,7 +110,7 @@ public class AdminAuthService {
     public void logout(String authorization) {
         String token = bearerToken(authorization);
         if (!token.isBlank()) {
-            jdbc.update("UPDATE admin_auth_tokens SET revoked = TRUE WHERE token = ?", token);
+            authRepository.revokeToken(token);
         }
     }
 
@@ -149,24 +133,7 @@ public class AdminAuthService {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Admin login is required");
         }
 
-        AdminUserRow row = jdbc.query("""
-                SELECT a.id, a.username, a.password_salt, a.password_hash, a.display_name,
-                       a.role_key, JSON_UNQUOTE(JSON_EXTRACT(a.permissions, '$')) AS permissions, a.status
-                FROM admin_auth_tokens t
-                JOIN admin_users a ON a.id = t.admin_id
-                WHERE t.token = ?
-                  AND t.revoked = FALSE
-                  AND t.expires_at > CURRENT_TIMESTAMP
-                """, (rs, rowNum) -> new AdminUserRow(
-                rs.getLong("id"),
-                rs.getString("username"),
-                rs.getString("password_salt"),
-                rs.getString("password_hash"),
-                rs.getString("display_name"),
-                rs.getString("role_key"),
-                permissions(rs.getString("permissions")),
-                rs.getString("status")
-        ), token).stream().findFirst().orElse(null);
+        AdminUserRecord row = authRepository.findActiveAdminByToken(token).orElse(null);
 
         if (row == null) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Admin session is invalid or expired");
@@ -246,29 +213,11 @@ public class AdminAuthService {
         return attempt.lockedUntil() != null && !attempt.lockedUntil().isAfter(now);
     }
 
-    private AdminUserRow findAdminByUsername(String username) {
-        return jdbc.query("""
-                SELECT id, username, password_salt, password_hash, display_name,
-                       role_key, JSON_UNQUOTE(JSON_EXTRACT(permissions, '$')) AS permissions, status
-                FROM admin_users
-                WHERE username = ?
-                """, (rs, rowNum) -> new AdminUserRow(
-                rs.getLong("id"),
-                rs.getString("username"),
-                rs.getString("password_salt"),
-                rs.getString("password_hash"),
-                rs.getString("display_name"),
-                rs.getString("role_key"),
-                permissions(rs.getString("permissions")),
-                rs.getString("status")
-        ), username).stream().findFirst().orElse(null);
-    }
-
-    private AdminProfileResponse toProfile(AdminUserRow row) {
+    private AdminProfileResponse toProfile(AdminUserRecord row) {
         return new AdminProfileResponse(row.id(), row.username(), row.displayName(), row.roleKey(), resolvedPermissions(row));
     }
 
-    private List<String> resolvedPermissions(AdminUserRow row) {
+    private List<String> resolvedPermissions(AdminUserRecord row) {
         List<String> rolePermissions = rolePermissions(row.roleKey());
         if (!rolePermissions.isEmpty()) {
             return rolePermissions;
@@ -282,46 +231,18 @@ public class AdminAuthService {
             return List.of();
         }
         try {
-            return jdbc.query("""
-                    SELECT permission_key
-                    FROM admin_role_permissions
-                    WHERE role_key = ?
-                    ORDER BY permission_key
-                    """, (rs, rowNum) -> rs.getString("permission_key"), key);
+            return authRepository.findRolePermissions(key);
         } catch (Exception ex) {
             return List.of();
         }
     }
 
-    private List<String> permissions(String json) {
-        if (json == null || json.isBlank()) {
-            return List.of();
-        }
-        try {
-            return objectMapper.readValue(json, new TypeReference<List<String>>() {});
-        } catch (Exception ex) {
-            return new ArrayList<>();
-        }
-    }
-
-    private String writeJson(List<String> permissions) {
-        try {
-            return objectMapper.writeValueAsString(permissions);
-        } catch (Exception ex) {
-            return "[]";
-        }
-    }
-
-    private void upgradePasswordHashIfNeeded(AdminUserRow row, String password) {
+    private void upgradePasswordHashIfNeeded(AdminUserRecord row, String password) {
         if (!passwordHashService.needsUpgrade(row.passwordSalt(), row.passwordHash())) {
             return;
         }
         PasswordHashService.EncodedPassword passwordHash = passwordHashService.encode(password);
-        jdbc.update("""
-                UPDATE admin_users
-                SET password_salt = ?, password_hash = ?
-                WHERE id = ?
-                """, passwordHash.salt(), passwordHash.hash(), row.id());
+        authRepository.updatePasswordHash(row.id(), passwordHash.salt(), passwordHash.hash());
     }
 
     private String bearerToken(String authorization) {
@@ -338,18 +259,6 @@ public class AdminAuthService {
 
     private String randomToken() {
         return UUID.randomUUID().toString().replace("-", "");
-    }
-
-    private record AdminUserRow(
-            Long id,
-            String username,
-            String passwordSalt,
-            String passwordHash,
-            String displayName,
-            String roleKey,
-            List<String> permissions,
-            String status
-    ) {
     }
 
     private record LoginAttempt(int failures, LocalDateTime lockedUntil) {

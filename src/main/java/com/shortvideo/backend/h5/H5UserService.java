@@ -67,6 +67,7 @@ import com.shortvideo.backend.h5.dto.UploadSignatureResponse;
 import com.shortvideo.backend.h5.dto.WalletResponse;
 import com.shortvideo.backend.h5.dto.WatchHistoryRequest;
 import com.shortvideo.backend.h5.dto.WatchHistoryResponse;
+import com.shortvideo.backend.h5.repository.H5AuthTokenRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -102,6 +103,7 @@ public class H5UserService {
     private final ObjectMapper objectMapper;
     private final DataProtectionService dataProtection;
     private final PasswordHashService passwordHashService;
+    private final H5AuthTokenRepository authTokenRepository;
     private final String publicBaseUrl;
     private final String avatarUploadDir;
     private final boolean demoRechargeEnabled;
@@ -114,6 +116,7 @@ public class H5UserService {
             ObjectMapper objectMapper,
             DataProtectionService dataProtection,
             PasswordHashService passwordHashService,
+            H5AuthTokenRepository authTokenRepository,
             @Value("${app.public-base-url}") String publicBaseUrl,
             @Value("${app.storage.avatar-upload-dir}") String avatarUploadDir,
             @Value("${app.demo.recharge-enabled:true}") boolean demoRechargeEnabled,
@@ -124,6 +127,7 @@ public class H5UserService {
         this.objectMapper = objectMapper;
         this.dataProtection = dataProtection;
         this.passwordHashService = passwordHashService;
+        this.authTokenRepository = authTokenRepository;
         this.publicBaseUrl = trimTrailingSlash(publicBaseUrl);
         this.avatarUploadDir = avatarUploadDir;
         this.demoRechargeEnabled = demoRechargeEnabled;
@@ -249,14 +253,9 @@ public class H5UserService {
     @Transactional
     public RefreshTokenResponse refresh(RefreshTokenRequest request) {
         String refreshToken = request == null ? "" : defaultText(request.refreshToken(), "");
-        Long userId = jdbc.query("""
-                SELECT user_id
-                FROM h5_auth_tokens
-                WHERE refresh_token = ? AND revoked = FALSE AND expires_at > CURRENT_TIMESTAMP
-                """, (rs, rowNum) -> rs.getLong("user_id"), refreshToken).stream()
-                .findFirst()
+        Long userId = authTokenRepository.findActiveUserIdByRefreshToken(refreshToken)
                 .orElseThrow(() -> new IllegalArgumentException("refreshToken is invalid"));
-        jdbc.update("UPDATE h5_auth_tokens SET revoked = TRUE WHERE refresh_token = ?", refreshToken);
+        authTokenRepository.revokeByRefreshToken(refreshToken);
         TokenPair token = issueToken(userId);
         return new RefreshTokenResponse(token.token(), token.refreshToken(), TOKEN_SECONDS);
     }
@@ -264,7 +263,7 @@ public class H5UserService {
     @Transactional
     public ApiOkResponse logout(String refreshToken) {
         if (refreshToken != null && !refreshToken.isBlank()) {
-            jdbc.update("UPDATE h5_auth_tokens SET revoked = TRUE WHERE refresh_token = ?", refreshToken);
+            authTokenRepository.revokeByRefreshToken(refreshToken);
         }
         return new ApiOkResponse(true);
     }
@@ -922,10 +921,7 @@ public class H5UserService {
     private TokenPair issueToken(long userId) {
         String token = "h5_" + shortToken();
         String refreshToken = "h5r_" + shortToken();
-        jdbc.update("""
-                INSERT INTO h5_auth_tokens (token, refresh_token, user_id, expires_at)
-                VALUES (?, ?, ?, ?)
-                """, token, refreshToken, userId, Timestamp.valueOf(LocalDateTime.now().plusSeconds(TOKEN_SECONDS)));
+        authTokenRepository.save(token, refreshToken, userId, LocalDateTime.now().plusSeconds(TOKEN_SECONDS));
         return new TokenPair(token, refreshToken);
     }
 
@@ -934,11 +930,7 @@ public class H5UserService {
         if (token.isBlank() || !token.startsWith("h5_")) {
             return Optional.empty();
         }
-        return jdbc.query("""
-                SELECT user_id
-                FROM h5_auth_tokens
-                WHERE token = ? AND revoked = FALSE AND expires_at > CURRENT_TIMESTAMP
-                """, (rs, rowNum) -> rs.getLong("user_id"), token).stream().findFirst();
+        return authTokenRepository.findActiveUserIdByAccessToken(token);
     }
 
     private boolean hasBearerToken(String authorization) {

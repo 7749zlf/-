@@ -27,6 +27,7 @@ class H5UserServiceSmsRateLimitTests {
                 new ObjectMapper(),
                 new DataProtectionService("test-data-key-at-least-32-characters"),
                 new PasswordHashService(),
+                null,
                 "http://localhost:8081",
                 "uploads/avatars",
                 true,

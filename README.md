@@ -40,6 +40,17 @@ Use `/api/health/live` for process liveness.
 
 Use `/api/health/ready` for readiness. The readiness check verifies database connectivity and upload storage writability.
 
+## Backend Layering
+
+Keep request handling, business workflow, and database access in separate layers:
+
+- `*Controller`: HTTP request/response boundary only.
+- `*Service`: business rules, transactions, orchestration, and validation.
+- `*Repository`: SQL and persistence access through `JdbcTemplate`.
+- `dto`: external API payloads.
+
+New persistence code should be placed behind a repository class instead of embedding SQL directly in controllers or services. Existing large services are being migrated incrementally to this shape, starting with `h5.repository.H5AuthTokenRepository` and `admin.repository.AdminAuthRepository`.
+
 ## Build
 
 ```bash
@@ -49,7 +60,7 @@ Use `/api/health/ready` for readiness. The readiness check verifies database con
 ## Focused Tests
 
 ```bash
-./mvnw "-Dtest=CorsConfigTests,ProductionSafetyGuardTests,PasswordHashServiceTests,TextEncodingRepairTests,H5UserServicePaymentStatusTests,H5UserServiceProductionModeTests,H5UserServiceSmsRateLimitTests" test
+./mvnw "-Dtest=CorsConfigTests,ProductionSafetyGuardTests,PasswordHashServiceTests,TextEncodingRepairTests,H5UserServicePaymentStatusTests,H5UserServiceProductionModeTests,H5UserServiceSmsRateLimitTests,AdminAuthServiceLayeringTests,TokenAuthenticationServiceTests" test
 ```
 
 The full integration suite requires a reachable MySQL database with the project schema and seed data.
