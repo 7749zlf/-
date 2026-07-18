@@ -40,6 +40,11 @@ class H5UserServicePaymentStatusTests {
         assertBadStatus("whatever");
     }
 
+    @Test
+    void ignoresNonH5BearerTokenWhenAuthenticatingH5User() {
+        assertThat(service.authenticatedUserId("Bearer adm_token")).isEmpty();
+    }
+
     private void assertBadStatus(String status) {
         assertThatThrownBy(() -> service.normalizePaymentStatus(status))
                 .isInstanceOf(ResponseStatusException.class)

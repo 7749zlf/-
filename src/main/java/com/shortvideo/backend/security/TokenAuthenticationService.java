@@ -30,12 +30,22 @@ public class TokenAuthenticationService {
     public Optional<Authentication> authenticate(HttpServletRequest request) {
         String authorization = request.getHeader("Authorization");
         String legacyAdminToken = request.getHeader("X-Admin-Token");
+        String bearerToken = bearerToken(authorization);
+
+        if (hasText(legacyAdminToken) || bearerToken.startsWith("adm_")) {
+            return adminAuthService.authenticatedProfile(authorization, legacyAdminToken)
+                    .map(this::adminAuthentication);
+        }
+
+        if (bearerToken.startsWith("h5_")) {
+            return h5UserService.authenticatedUserId(authorization)
+                    .map(this::h5Authentication);
+        }
 
         Optional<AdminProfileResponse> admin = adminAuthService.authenticatedProfile(authorization, legacyAdminToken);
         if (admin.isPresent()) {
             return admin.map(this::adminAuthentication);
         }
-
         return h5UserService.authenticatedUserId(authorization)
                 .map(this::h5Authentication);
     }
@@ -76,5 +86,16 @@ public class TokenAuthenticationService {
             return List.of();
         }
         return new ArrayList<>(permissions);
+    }
+
+    private String bearerToken(String authorization) {
+        if (!hasText(authorization)) {
+            return "";
+        }
+        return authorization.replaceFirst("(?i)^Bearer\\s+", "").trim();
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 }

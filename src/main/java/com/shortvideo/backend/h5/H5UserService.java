@@ -931,7 +931,7 @@ public class H5UserService {
 
     private Optional<Long> userIdFromAuthorization(String authorization) {
         String token = bearerToken(authorization);
-        if (token.isBlank()) {
+        if (token.isBlank() || !token.startsWith("h5_")) {
             return Optional.empty();
         }
         return jdbc.query("""
