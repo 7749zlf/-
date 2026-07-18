@@ -3,6 +3,8 @@ package com.shortvideo.backend.h5;
 import java.net.URI;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.HashSet;
@@ -60,18 +62,17 @@ public class H5Service {
                 FROM dramas
                 WHERE status = 'PUBLISHED'
                 ORDER BY sort_order, id
-                """, (rs, rowNum) -> new DramaResponse(
-                rs.getLong("id"),
-                repair(rs.getString("title")),
-                repair(rs.getString("tag")),
-                rs.getInt("episode_count"),
-                repair(rs.getString("heat_text")),
-                publicMediaUrl(rs.getString("cover_url"))
-        ));
+                """, (rs, rowNum) -> toDramaResponse(rs));
     }
 
     public DramaResponse getDefaultDrama() {
-        return listDramas().stream()
+        return jdbc.query("""
+                SELECT id, title, tag, episode_count, heat_text, cover_url
+                FROM dramas
+                WHERE status = 'PUBLISHED'
+                ORDER BY sort_order, id
+                LIMIT 1
+                """, (rs, rowNum) -> toDramaResponse(rs)).stream()
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("No published dramas found"));
     }
@@ -81,15 +82,19 @@ public class H5Service {
                 SELECT id, title, tag, episode_count, heat_text, cover_url
                 FROM dramas
                 WHERE id = ? AND status = 'PUBLISHED'
-                """, (rs, rowNum) -> new DramaResponse(
+                """, (rs, rowNum) -> toDramaResponse(rs), dramaId).stream().findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Drama not found: " + dramaId));
+    }
+
+    private DramaResponse toDramaResponse(ResultSet rs) throws SQLException {
+        return new DramaResponse(
                 rs.getLong("id"),
                 repair(rs.getString("title")),
                 repair(rs.getString("tag")),
                 rs.getInt("episode_count"),
                 repair(rs.getString("heat_text")),
                 publicMediaUrl(rs.getString("cover_url"))
-        ), dramaId).stream().findFirst()
-                .orElseThrow(() -> new IllegalArgumentException("Drama not found: " + dramaId));
+        );
     }
 
     public List<EpisodeResponse> listEpisodes(Long dramaId) {

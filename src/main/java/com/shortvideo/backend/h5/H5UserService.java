@@ -11,6 +11,8 @@ import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.sql.Date;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -85,6 +87,16 @@ public class H5UserService {
     private static final int SMS_DAILY_LIMIT = 10;
     private static final DateTimeFormatter ID_TIME = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
     private static final DateTimeFormatter REFUND_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+    private static final String WATCH_HISTORY_SELECT = """
+            SELECT w.id, w.drama_id, d.title AS drama_title, w.storyline_id,
+                   s.name AS storyline_name, w.episode_id, w.episode_number,
+                   e.title AS episode_title, e.cover_url, w.progress_seconds,
+                   w.duration_seconds, w.updated_at
+            FROM watch_history w
+            JOIN dramas d ON d.id = w.drama_id
+            JOIN episodes e ON e.id = w.episode_id
+            LEFT JOIN storylines s ON s.id = w.storyline_id
+            """;
 
     private final JdbcTemplate jdbc;
     private final ObjectMapper objectMapper;
@@ -475,9 +487,7 @@ public class H5UserService {
                 nonNegative(request.progressSeconds()),
                 nonNegative(request.durationSeconds()));
 
-        return listWatchHistoryByUserId(userId).stream()
-                .filter(item -> item.episodeId().equals(request.episodeId()))
-                .findFirst()
+        return watchHistoryByUserIdAndEpisodeId(userId, request.episodeId())
                 .orElseThrow(() -> new IllegalArgumentException("watch history save failed"));
     }
 
@@ -494,18 +504,21 @@ public class H5UserService {
     }
 
     private List<WatchHistoryResponse> listWatchHistoryByUserId(long userId) {
-        return jdbc.query("""
-                SELECT w.id, w.drama_id, d.title AS drama_title, w.storyline_id,
-                       s.name AS storyline_name, w.episode_id, w.episode_number,
-                       e.title AS episode_title, e.cover_url, w.progress_seconds,
-                       w.duration_seconds, w.updated_at
-                FROM watch_history w
-                JOIN dramas d ON d.id = w.drama_id
-                JOIN episodes e ON e.id = w.episode_id
-                LEFT JOIN storylines s ON s.id = w.storyline_id
+        return jdbc.query(WATCH_HISTORY_SELECT + """
                 WHERE w.user_id = ?
                 ORDER BY w.updated_at DESC
-                """, (rs, rowNum) -> new WatchHistoryResponse(
+                """, this::toWatchHistoryResponse, userId);
+    }
+
+    private Optional<WatchHistoryResponse> watchHistoryByUserIdAndEpisodeId(long userId, String episodeId) {
+        return jdbc.query(WATCH_HISTORY_SELECT + """
+                WHERE w.user_id = ? AND w.episode_id = ?
+                LIMIT 1
+                """, this::toWatchHistoryResponse, userId, episodeId).stream().findFirst();
+    }
+
+    private WatchHistoryResponse toWatchHistoryResponse(ResultSet rs, int rowNum) throws SQLException {
+        return new WatchHistoryResponse(
                 rs.getLong("id"),
                 rs.getLong("drama_id"),
                 repair(rs.getString("drama_title")),
@@ -518,7 +531,7 @@ public class H5UserService {
                 rs.getInt("progress_seconds"),
                 rs.getInt("duration_seconds"),
                 toLocalDateTime(rs.getTimestamp("updated_at"))
-        ), userId);
+        );
     }
 
     @Transactional

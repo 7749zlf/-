@@ -27,8 +27,8 @@ public class HealthController {
         this.avatarUploadDir = avatarUploadDir;
     }
 
-    @GetMapping("/api/health")
-    public Map<String, String> health() {
+    @GetMapping({"/api/health", "/api/health/live"})
+    public Map<String, String> live() {
         return Map.of("status", "ok");
     }
 
